@@ -10,6 +10,7 @@
 
 #include <windows.h>
 
+#include <codecvt>
 #include <unordered_set>
 
 namespace {
@@ -123,6 +124,70 @@ TEST_F(EnvWindowsTest, TestHandleNotInheritedLogger) {
   delete file;
 
   ASSERT_LEVELDB_OK(env_->RemoveFile(file_path));
+}
+
+TEST_F(EnvWindowsTest, TestOpenOnRead_Unicode) {
+  // Write some test data to a single file that will be opened |n| times.
+  std::string test_dir;
+  ASSERT_LEVELDB_OK(env_->GetTestDirectory(&test_dir));
+  std::string test_file = test_dir + u8"/open_on_runðŸƒ_read.txt";
+
+  std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+  std::wstring wideUtf8Path = converter.from_bytes(test_file);
+  FILE* f = _wfopen(wideUtf8Path.c_str(), L"w");
+  ASSERT_TRUE(f != nullptr);
+  const char kFileData[] = "abcdefghijklmnopqrstuvwxyz";
+  fputs(kFileData, f);
+  fclose(f);
+
+  // Open test file some number above the sum of the two limits to force
+  // leveldb::WindowsEnv to switch from mapping the file into memory
+  // to basic file reading.
+  const int kNumFiles = kMMapLimit + 5;
+  leveldb::RandomAccessFile* files[kNumFiles] = {0};
+  for (int i = 0; i < kNumFiles; i++) {
+    ASSERT_LEVELDB_OK(env_->NewRandomAccessFile(test_file, &files[i]));
+  }
+  char scratch;
+  Slice read_result;
+  for (int i = 0; i < kNumFiles; i++) {
+    ASSERT_LEVELDB_OK(files[i]->Read(i, 1, &read_result, &scratch));
+    ASSERT_EQ(kFileData[i], read_result[0]);
+  }
+  for (int i = 0; i < kNumFiles; i++) {
+    delete files[i];
+  }
+  ASSERT_LEVELDB_OK(env_->RemoveFile(test_file));
+}
+
+TEST_F(EnvWindowsTest, TestGetChildrenEmpty) {
+  // Create some dummy files.
+  std::string test_dir;
+  ASSERT_LEVELDB_OK(env_->GetTestDirectory(&test_dir));
+
+  std::vector<std::string> result;
+  ASSERT_LEVELDB_OK(env_->GetChildren(test_dir, &result));
+  ASSERT_EQ(2, result.size()); // "." and ".." are always returned.
+}
+
+TEST_F(EnvWindowsTest, TestGetChildren_ChildFiles) {
+  // Create some dummy files.
+  std::string test_dir;
+  ASSERT_LEVELDB_OK(env_->GetTestDirectory(&test_dir));
+
+  int childFilesCount = 10;
+  for (int i = 0; i < childFilesCount; i++) {
+    std::string test_file = test_dir + u8"/runðŸƒ_and_jumpðŸ¦˜_" + std::to_string(i) + ".txt";
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+    std::wstring wTest_file = converter.from_bytes(test_file);
+    FILE* f = _wfopen(wTest_file.c_str(), L"w");
+    ASSERT_TRUE(f != nullptr);
+    fclose(f);
+  }
+
+  std::vector<std::string> result;
+  ASSERT_LEVELDB_OK(env_->GetChildren(test_dir, &result));
+  ASSERT_EQ(childFilesCount + 2, result.size()); // "." and ".." are returned.
 }
 
 }  // namespace leveldb
