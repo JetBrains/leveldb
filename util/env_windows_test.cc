@@ -8,6 +8,61 @@
 #include "util/env_windows_test_helper.h"
 #include "util/testutil.h"
 
+#include <windows.h>
+
+#include <unordered_set>
+
+namespace {
+
+void GetOpenHandles(std::unordered_set<HANDLE>* open_handles) {
+  constexpr int kHandleOffset = 4;
+  const HANDLE kHandleUpperBound = reinterpret_cast<HANDLE>(1000 * kHandleOffset);
+
+  for (HANDLE handle = nullptr; handle < kHandleUpperBound; reinterpret_cast<size_t&>(handle) += kHandleOffset) {
+    DWORD dwFlags;
+    if (!GetHandleInformation(handle, &dwFlags)) {
+      ASSERT_EQ(ERROR_INVALID_HANDLE, ::GetLastError())
+          ;//<< "GetHandleInformation() should return ERROR_INVALID_HANDLE error on invalid handles";
+      continue;
+    }
+    open_handles->insert(handle);
+  }
+}
+
+void GetOpenedFileHandleByFileName(const char* name, HANDLE* result_handle) {
+  std::unordered_set<HANDLE> open_handles;
+  GetOpenHandles(&open_handles);
+
+  for (HANDLE handle : open_handles) {
+    char handle_path[MAX_PATH];
+    DWORD ret = ::GetFinalPathNameByHandleA(handle, handle_path, sizeof handle_path, FILE_NAME_NORMALIZED);
+    if (ret == 0) {
+      continue;
+    }
+
+    ASSERT_GT(sizeof handle_path, ret);// << "Path too long";
+    const char* last_backslash = std::strrchr(handle_path, '\\');
+    ASSERT_NE(last_backslash, static_cast<const char*>(nullptr));
+    if (std::strcmp(name, last_backslash + 1) == 0) {
+      *result_handle = handle;
+      return;
+    }
+  }
+
+  ASSERT_TRUE(false);// << "File handle not found";
+}
+
+void CheckOpenedFileHandleNonInheritable(const char* name) {
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  GetOpenedFileHandleByFileName(name, &handle);
+
+  DWORD dwFlags;
+  ASSERT_TRUE(GetHandleInformation(handle, &dwFlags));
+  ASSERT_TRUE(!(dwFlags & HANDLE_FLAG_INHERIT));
+}
+
+}  // namespace
+
 namespace leveldb {
 
 static const int kMMapLimit = 4;
@@ -29,7 +84,7 @@ TEST_F(EnvWindowsTest, TestOpenOnRead) {
   ASSERT_LEVELDB_OK(env_->GetTestDirectory(&test_dir));
   std::string test_file = test_dir + "/open_on_read.txt";
 
-  FILE* f = std::fopen(test_file.c_str(), "w");
+  FILE* f = std::fopen(test_file.c_str(), "wN");
   ASSERT_TRUE(f != nullptr);
   const char kFileData[] = "abcdefghijklmnopqrstuvwxyz";
   fputs(kFileData, f);
@@ -53,6 +108,21 @@ TEST_F(EnvWindowsTest, TestOpenOnRead) {
     delete files[i];
   }
   ASSERT_LEVELDB_OK(env_->RemoveFile(test_file));
+}
+
+TEST_F(EnvWindowsTest, TestHandleNotInheritedLogger) {
+  std::string test_dir;
+  ASSERT_LEVELDB_OK(env_->GetTestDirectory(&test_dir));
+  const char kFileName[] = "handle_not_inherited_logger.txt";
+  std::string file_path = test_dir + "/" + kFileName;
+  ASSERT_LEVELDB_OK(WriteStringToFile(env_, "0123456789", file_path));
+
+  leveldb::Logger* file = nullptr;
+  ASSERT_LEVELDB_OK(env_->NewLogger(file_path, &file));
+  CheckOpenedFileHandleNonInheritable(kFileName);
+  delete file;
+
+  ASSERT_LEVELDB_OK(env_->RemoveFile(file_path));
 }
 
 }  // namespace leveldb
