@@ -295,6 +295,10 @@ if(LEVELDB_BUILD_TESTS)
   set(install_gmock OFF)
   set(build_gmock ON)
 
+  # BUILD_SHARED_LIBS is off.
+  set(BUILD_SHARED_LIBS_SAVED "${BUILD_SHARED_LIBS}")
+  set(BUILD_SHARED_LIBS OFF)
+
   # This project is tested using GoogleTest.
   add_subdirectory("third_party/googletest")
 
@@ -302,6 +306,9 @@ if(LEVELDB_BUILD_TESTS)
   set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
   set(BENCHMARK_ENABLE_EXCEPTIONS OFF CACHE BOOL "" FORCE)
   add_subdirectory("third_party/benchmark")
+
+  # Restore BUILD_SHARED_LIBS.
+  set(BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS_SAVED}")
 
   # GoogleTest triggers a missing field initializers warning.
   if(LEVELDB_HAVE_NO_MISSING_FIELD_INITIALIZERS)
